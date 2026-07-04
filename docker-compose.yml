@@ -1,0 +1,121 @@
+
+services:
+  # 1. 业务数据库 (对应你微服务里的 MySQL)
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-business_db}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # 2. 外部记忆库 (原 5432 端口)
+  postgres_session:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-123456}
+      POSTGRES_DB: ${PG_DBNAME:-ai_customer}
+    ports:
+      - "5432:5432"
+    volumes:
+      - session_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "ai_customer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # 3. 知识库向量库 (原 5433 端口)
+  postgres_vector:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${VECTOR_PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${VECTOR_PG_PASSWORD:-123456}
+      POSTGRES_DB: ${VECTOR_PG_DBNAME:-ai_customer}
+    ports:
+      - "5433:5432"
+    volumes:
+      - vector_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "ai_customer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # 4. 消息队列 (Redis)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # 5. 业务微服务 API (8001 端口)
+  business_api:
+    build: .
+    command: uvicorn business_api.main:app --host 0.0.0.0 --port 8001
+    environment:
+      - MYSQL_HOST=mysql
+    ports:
+      - "8001:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # 6. AI 核心调度服务 (8000 端口)
+  agent_api:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - ./.env
+    environment:
+      - DOCKER_ENV=1
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres_vector:
+        condition: service_healthy
+      postgres_session:
+        condition: service_healthy
+      business_api:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mysql_data:
+  session_data:
+  vector_data:

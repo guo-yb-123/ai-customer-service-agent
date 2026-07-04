@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 客服工作台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f7fa;color:#333}
+.header{background:#fff;border-bottom:1px solid #e8e8e8;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:18px;color:#1a1a2e}
+.header .stats{display:flex;gap:20px;font-size:13px}
+.stat-item{display:flex;align-items:center;gap:6px}
+.stat-dot{width:8px;height:8px;border-radius:50%}
+.stat-dot.pending{background:#f0ad4e}
+.stat-dot.active{background:#5bc0de}
+.stat-dot.closed{background:#5cb85c}
+.main{display:flex;height:calc(100vh - 52px)}
+.sidebar{width:360px;background:#fff;border-right:1px solid #e8e8e8;overflow-y:auto}
+.ticket-list{padding:0}
+.ticket-item{padding:14px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;transition: background .15s}
+.ticket-item:hover{background:#f8f9ff}
+.ticket-item.active{background:#e8f0fe;border-left:3px solid #4285f4}
+.ticket-item .t-id{font-weight:600;color:#1a1a2e}
+.ticket-item .t-meta{font-size:12px;color:#999;margin-top:4px;display:flex;justify-content:space-between}
+.ticket-item .t-content{font-size:13px;color:#666;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.badge.pending{background:#fcf8e3;color:#8a6d3b}
+.badge.active{background:#d9edf7;color:#31708f}
+.badge.closed{background:#dff0d8;color:#3c763d}
+.workspace{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.workspace-empty{flex:1;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:16px}
+.chat-area{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:10px}
+.chat-msg{max-width:70%;padding:10px 14px;border-radius:10px;font-size:14px;line-height:1.5}
+.chat-msg.user{align-self:flex-end;background:#e3f2fd;color:#1565c0;border-bottom-right-radius:2px}
+.chat-msg.assistant{align-self:flex-start;background:#f5f5f5;color:#333;border-bottom-left-radius:2px}
+.chat-msg.system{align-self:center;background:#fff3e0;color:#e65100;font-size:12px;padding:6px 12px;border-radius:4px}
+.chat-msg .time{font-size:10px;color:#bbb;margin-top:4px}
+.reply-box{border-top:1px solid #e8e8e8;padding:16px;background:#fff;display:flex;gap:10px}
+.reply-box textarea{flex:1;border:1px solid #ddd;border-radius:8px;padding:10px;resize:none;font-size:14px;min-height:60px}
+.reply-box textarea:focus{outline:none;border-color:#4285f4}
+.btn{padding:8px 20px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:all .2s}
+.btn-primary{background:#4285f4;color:#fff}.btn-primary:hover{background:#3367d6}
+.btn-success{background:#5cb85c;color:#fff}.btn-success:hover{background:#4cae4c}
+.btn-warning{background:#f0ad4e;color:#fff}.btn-warning:hover{background:#ec971f}
+.btn-sm{padding:4px 12px;font-size:12px}
+.toolbar{padding:12px 20px;background:#fff;border-bottom:1px solid #e8e8e8;display:flex;gap:10px;align-items:center}
+.toolbar .agent-name{font-weight:600;color:#4285f4}
+.filter-bar{padding:10px 16px;background:#fafafa;border-bottom:1px solid #eee;display:flex;gap:8px}
+.filter-bar button{padding:4px 12px;border:1px solid #ddd;border-radius:14px;background:#fff;cursor:pointer;font-size:12px;transition:all .15s}
+.filter-bar button.active{background:#4285f4;color:#fff;border-color:#4285f4}
+.refresh-hint{font-size:11px;color:#bbb;text-align:center;padding:8px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🛎 AI 客服工作台</h1>
+  <div class="stats">
+    <span class="stat-item"><span class="stat-dot pending"></span> 待处理: <b id="stat_pending">-</b></span>
+    <span class="stat-item"><span class="stat-dot active"></span> 处理中: <b id="stat_active">-</b></span>
+    <span class="stat-item"><span class="stat-dot closed"></span> 已完成: <b id="stat_closed">-</b></span>
+    <span style="color:#999;font-size:12px" id="auto_refresh"></span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- 左侧工单列表 -->
+  <div class="sidebar">
+    <div class="filter-bar">
+      <button data-filter="active" class="active">待处理/处理中</button>
+      <button data-filter="pending">仅待处理</button>
+      <button data-filter="all">全部</button>
+      <button data-filter="closed">已完成</button>
+    </div>
+    <div class="ticket-list" id="ticket_list">
+      <div style="padding:40px;text-align:center;color:#ccc">加载中...</div>
+    </div>
+    <div class="refresh-hint">每 10 秒自动刷新</div>
+  </div>
+
+  <!-- 右侧工作区 -->
+  <div class="workspace">
+    <div class="workspace-empty" id="workspace_empty">
+      👈 点击左侧工单开始处理
+    </div>
+
+    <div class="toolbar" id="toolbar" style="display:none">
+      <span>工单 <b id="toolbar_ticket"></b></span>
+      <span style="color:#999">| 用户: <b id="toolbar_user"></b></span>
+      <span style="color:#999">| 状态: <span id="toolbar_status"></span></span>
+      <span style="flex:1"></span>
+      <button class="btn btn-warning btn-sm" id="btn_claim" onclick="claimTicket()">认领工单</button>
+      <button class="btn btn-sm" style="background:#999;color:#fff" onclick="closeTicket()">关闭工单</button>
+    </div>
+
+    <div class="chat-area" id="chat_area" style="display:none"></div>
+
+    <div class="reply-box" id="reply_box" style="display:none">
+      <textarea id="reply_text" placeholder="输入回复内容..."></textarea>
+      <button class="btn btn-primary" onclick="sendReply()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/v1/admin';
+let currentTicket = null;
+let currentFilter = 'active';
+let agentName = localStorage.getItem('agent_name') || '';
+
+// 初始化：询问客服姓名
+if (!agentName) {
+  agentName = prompt('请输入您的客服姓名：', '张三');
+  if (agentName) localStorage.setItem('agent_name', agentName);
+  else agentName = '客服';
+}
+
+function $(id) { return document.getElementById(id); }
+
+// 加载工单列表
+async function loadTickets() {
+  try {
+    const resp = await fetch(`${API}/tickets?status_filter=${currentFilter}`);
+    const tickets = await resp.json();
+    renderTicketList(tickets);
+    // 加载统计
+    const statsResp = await fetch(`${API}/stats`);
+    const stats = await statsResp.json();
+    $('stat_pending').textContent = stats.pending;
+    $('stat_active').textContent = stats.active;
+    $('stat_closed').textContent = stats.closed;
+  } catch(e) {
+    console.error('加载失败:', e);
+  }
+  $('auto_refresh').textContent = new Date().toLocaleTimeString();
+}
+
+function renderTicketList(tickets) {
+  const container = $('ticket_list');
+  if (!tickets.length) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:#ccc">暂无工单 🎉</div>';
+    return;
+  }
+  container.innerHTML = tickets.map(t => `
+    <div class="ticket-item ${currentTicket?.ticket_id === t.ticket_id ? 'active' : ''}"
+         onclick="selectTicket(${t.ticket_id})">
+      <div class="t-id">#${t.ticket_id} ${t.user_id}</div>
+      <div class="t-content">${escapeHtml(t.content || '无描述')}</div>
+      <div class="t-meta">
+        <span class="badge ${t.status === '待处理' ? 'pending' : t.status === '处理中' ? 'active' : 'closed'}">${t.status}</span>
+        <span>${t.create_time}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function selectTicket(ticketId) {
+  try {
+    const resp = await fetch(`${API}/tickets/${ticketId}`);
+    const data = await resp.json();
+    currentTicket = data.ticket;
+
+    // 显示工作区
+    $('workspace_empty').style.display = 'none';
+    $('toolbar').style.display = 'flex';
+    $('chat_area').style.display = 'flex';
+    $('reply_box').style.display = currentTicket.status !== '已完成' ? 'flex' : 'none';
+
+    $('toolbar_ticket').textContent = `#${data.ticket.ticket_id}`;
+    $('toolbar_user').textContent = data.ticket.user_id;
+    $('toolbar_status').innerHTML = `<span class="badge ${data.ticket.status==='待处理'?'pending':data.ticket.status==='处理中'?'active':'closed'}">${data.ticket.status}</span>`;
+    $('btn_claim').style.display = data.ticket.status === '待处理' ? 'inline-block' : 'none';
+
+    // 渲染聊天记录
+    renderChatHistory(data.chat_history || [], data.ticket.content);
+
+    // 高亮
+    loadTickets();
+  } catch(e) {
+    console.error('加载工单详情失败:', e);
+  }
+}
+
+function renderChatHistory(history, ticketContent) {
+  const container = $('chat_area');
+  let html = '';
+
+  if (ticketContent) {
+    html += `<div class="chat-msg system">📋 用户诉求：${escapeHtml(ticketContent)}</div>`;
+  }
+
+  history.forEach(msg => {
+    const role = msg.role || msg.type || 'user';
+    const content = msg.content || msg.text || '';
+    const time = msg.time || '';
+    html += `<div class="chat-msg ${role}">
+      <div>${escapeHtml(content)}</div>
+      ${time ? `<div class="time">${time}</div>` : ''}
+    </div>`;
+  });
+
+  if (!history.length && !ticketContent) {
+    html = '<div style="text-align:center;color:#ccc;padding:40px">暂无对话记录</div>';
+  }
+
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+
+async function claimTicket() {
+  if (!currentTicket) return;
+  try {
+    const resp = await fetch(`${API}/tickets/${currentTicket.ticket_id}/claim`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agent_name: agentName}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      alert('工单已认领，开始处理！');
+      selectTicket(currentTicket.ticket_id);
+    }
+  } catch(e) {
+    alert('认领失败: ' + e);
+  }
+}
+
+async function sendReply() {
+  if (!currentTicket) return;
+  const reply = $('reply_text').value.trim();
+  if (!reply) return;
+
+  try {
+    const resp = await fetch(`${API}/tickets/${currentTicket.ticket_id}/reply`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agent_name: agentName, reply: reply}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      $('reply_text').value = '';
+      selectTicket(currentTicket.ticket_id); // 刷新
+    }
+  } catch(e) {
+    alert('发送失败: ' + e);
+  }
+}
+
+async function closeTicket() {
+  if (!currentTicket) return;
+  if (!confirm('确认关闭此工单？')) return;
+  try {
+    const resp = await fetch(`${API}/tickets/${currentTicket.ticket_id}/close`, {method: 'POST'});
+    const data = await resp.json();
+    if (data.success) {
+      alert('工单已关闭');
+      currentTicket = null;
+      $('workspace_empty').style.display = 'flex';
+      $('toolbar').style.display = 'none';
+      $('chat_area').style.display = 'none';
+      $('reply_box').style.display = 'none';
+      loadTickets();
+    }
+  } catch(e) {
+    alert('关闭失败: ' + e);
+  }
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+// 过滤器
+document.querySelectorAll('.filter-bar button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.filter-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    loadTickets();
+  };
+});
+
+// 初始加载 + 自动刷新
+loadTickets();
+setInterval(loadTickets, 10000);
+</script>
+</body>
+</html>
