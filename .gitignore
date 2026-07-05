@@ -1,4 +1,4 @@
-# ===== Python =====
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -8,39 +8,38 @@ build/
 *.egg
 *.so
 
-# ===== Virtual Environment =====
+# Virtual Environment
 .venv/
 venv/
 env/
 
-# ===== Environment & Secrets =====
+# Environment & Secrets
 .env
 *.local.env
 
-# ===== IDE =====
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# ===== Docker =====
+# Docker
 docker-compose.override.yml
 
-# ===== OS =====
+# OS
 .DS_Store
 Thumbs.db
 
-# ===== Data =====
+# Data
 data/chroma/
 *.db
 *.sqlite
 
-# ===== Logs =====
+# Logs
 logs/
 *.log
 
-# ===== Temp =====
+# Temp
 tmp/
 temp/
-.claude/tasks/
