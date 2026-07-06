@@ -14,8 +14,9 @@ from app.services.graph.tools.agent_memory import AgentExternalMemory
 from app.services.graph.tools.agent_core import agent_main_run
 from app.utils.logging_config import get_logger
 from app.utils.input_sanitizer import (
-    validate_session_id, validate_user_id, validate_question, sanitize_text,
+    validate_session_id, validate_user_id, validate_question
 )
+import config
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["对话管理"])
@@ -47,7 +48,6 @@ def chat_local(
         AgentExternalMemory.init_session(sid, uid)
 
     # ========== 前置拉取CRM会员上下文 ==========
-    # 【修复 2】初始值必须设为 None，绝不能给 "普通用户"，否则大模型会被误导！
     member_level = None
     try:
         resp_customer = requests.get(
@@ -55,25 +55,96 @@ def chat_local(
             params={"user_id": uid},
             timeout=3
         )
-        # 只有当请求返回 200 状态码时，才真正尝试读取会员等级
         if resp_customer.status_code == 200:
             customer_info = resp_customer.json()
             member_level = customer_info.get("member_level")
         else:
             logger.warning(f"CRM接口返回非200状态码: {resp_customer.status_code}")
     except Exception as e:
-        # 发生任何网络异常，member_level 依然保持为 None
         logger.warning(f"CRM接口网络异常 session={sid}, user={uid}, err={str(e)}")
 
-    # ========== 调用Agent主调度，传入已查询会员等级 ==========
+    # ========== LangGraph 功能开关 ==========
+    if config.ENABLE_LANGGRAPH:
+        return _run_langgraph_chat(sid, uid, question, member_level)
+
+    # ========== 原有 Agent 调度（兜底） ==========
+    return _run_legacy_chat(sid, uid, question, db, member_level)
+
+
+def _run_langgraph_chat(session_id: str, user_id: str, question: str, member_level: str | None) -> dict:
+    """使用 LangGraph 处理对话"""
+    from app.services.graph import get_compiled_graph, GraphState
+
+    memory = AgentExternalMemory.load_session_meta(session_id)
+    chat_history = memory.get("chat_history", [])
+    extracted_slots = memory.get("extracted_slots", {})
+
+    initial_state = GraphState(
+        session_id=session_id,
+        user_id=user_id,
+        user_input=question,
+        question=question,
+        member_level=member_level,
+        chat_history=chat_history,
+        collected_slots={"user_id": user_id, **extracted_slots},
+        max_reflection_retries=config.MAX_REFLECTION_RETRIES,
+    )
+
+    graph = get_compiled_graph()
+    graph_config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        final_state = graph.invoke(initial_state, graph_config)
+
+        response_data = {
+            "reply": final_state.get("reply_text", ""),
+            "error_msg": final_state.get("error_msg", ""),
+        }
+
+        # 检查是否有中断（审批等待）
+        if "__interrupt__" in final_state:
+            interrupts = final_state["__interrupt__"]
+            if interrupts:
+                interrupt_data = interrupts[0].value if hasattr(interrupts[0], 'value') else interrupts[0]
+                response_data["action"] = "approval_required"
+                response_data["approval_id"] = interrupt_data.get("approval_id", "")
+                response_data["stage"] = "APPROVAL"
+                logger.info("LangGraph 审批中断: approval_id=%s", interrupt_data.get("approval_id"))
+
+        for field in ("task_id", "ticket_id", "action"):
+            val = final_state.get(field)
+            if val and field not in response_data:
+                response_data[field] = val
+
+        return response_data
+
+    except Exception as e:
+        error_str = str(e)
+        if "GraphInterrupt" in type(e).__name__ or "interrupt" in error_str.lower():
+            logger.info("LangGraph 被中断（审批等待），session=%s", session_id)
+            return {
+                "reply": "您的操作已提交审核，请稍候...",
+                "action": "approval_required",
+                "error_msg": "",
+            }
+
+        logger.exception("LangGraph 执行异常 session=%s: %s", session_id, e)
+        return {
+            "reply": "服务暂时出现异常，请稍后重试",
+            "error_msg": error_str,
+        }
+
+
+def _run_legacy_chat(session_id: str, user_id: str, question: str, db: Session, member_level: str | None) -> dict:
+    """使用原有 agent_main_run 处理对话（向后兼容）"""
     try:
         msg_obj = agent_main_run(
-            session_id=sid,
-            user_id=uid,
+            session_id=session_id,
+            user_id=user_id,
             user_query=question,
             db=db,
             max_tool_round=3,
-            member_level=member_level  # 👈 这里现在传入的是 None 或者真正查到的等级
+            member_level=member_level,
         )
 
         reply_text = msg_obj.content if hasattr(msg_obj, 'content') else str(msg_obj)
@@ -93,7 +164,7 @@ def chat_local(
         return response_data
 
     except Exception as e:
-        logger.exception(f"Agent调度全局异常 session_id={sid}, user_id={uid}")
+        logger.exception(f"Agent调度全局异常 session_id={session_id}, user_id={user_id}")
         return {
             "reply": "服务暂时出现异常，请稍后重试",
             "error_msg": str(e)

@@ -1,5 +1,4 @@
 import os
-
 import config
 
 os.environ["PYTHONUTF8"] = "1"

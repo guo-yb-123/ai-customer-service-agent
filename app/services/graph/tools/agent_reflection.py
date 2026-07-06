@@ -17,10 +17,18 @@ AI 回复内容：{ai_reply}
 工具返回的数据：{tool_result}
 
 请逐项检查并输出 JSON：
-1. has_hallucination: AI 是否编造了工具返回中不存在的订单号、物流状态等信息？true/false
+1. has_hallucination: AI 是否编造了工具返回中不存在的订单号、物流单号、金额、商品名、会员等级等具体信息？true/false
+   注意：说"暂无记录"、"暂时没查到"、"建议联系人工"不算编造，这是如实报告。
+   只有明确编造了数据中不存在的信息才算幻觉。
 2. has_missing_info: AI 是否遗漏了用户明确询问的关键信息？true/false
 3. matches_intent: AI 回复是否直接回应了用户的问题？true/false
 4. overall_score: 1-5 分（5=完美）
+   评分标准：
+   - 5分：完全基于工具数据，准确回应了用户问题
+   - 4分：基于工具数据，但表达可以更好
+   - 3分：部分偏离数据，或遗漏了关键信息
+   - 2分：有明显编造或严重遗漏
+   - 1分：完全编造
 5. fix_suggestion: 如果有问题，给出修改建议（没问题写"无"）
 
 只返回 JSON，不要任何其他文字。
@@ -66,7 +74,7 @@ def reflection_check(
             user_question=user_question,
             ai_reply=ai_reply,
             tool_name=tool_name or "无",
-            tool_result=str(tool_result)[:500] if tool_result else "无",
+            tool_result=str(tool_result)[:4000] if tool_result else "无",
         )
         raw = call_qwen_once(prompt)
 
@@ -105,31 +113,38 @@ def reflection_check(
 
 
 def _quick_rule_check(reply: str, tool_result: str) -> str | None:
-    """快速规则检查：不消耗 LLM token，检查明显错误"""
+    """快速规则检查：不消耗 LLM token，检查明显的数据编造"""
 
     # 1. 空回复检查
     if not reply or len(reply.strip()) < 5:
         return "回复内容过短或为空"
 
-    # 2. 编造订单号检查：如果回复中有订单号格式的字符串，验证是否来自工具数据
+    # 2. 编造订单号检查：回复中的订单号必须在工具数据中存在
     fake_order_patterns = [
-        r"OD\d{9,}",  # 明显假的订单号
+        r"OD\d{9,}",    # 明显假的订单号
+        r"SF\d{10,}",   # 顺丰单号
+        r"YT\d{10,}",   # 圆通单号
     ]
     for pattern in fake_order_patterns:
         found = re.findall(pattern, reply)
         if found and tool_result:
             for order_no in found:
                 if order_no not in str(tool_result):
-                    return f"回复中出现了工具数据中不存在的订单号: {order_no}"
+                    return f"回复中出现工具数据中不存在的编号: {order_no}"
 
-    # 3. 明显的道歉/兜底/异常回复
-    bailout_phrases = ["服务暂时出现异常", "请稍后重试", "我无法", "作为AI"]
-    if any(phrase in reply for phrase in bailout_phrases):
-        return "回复中包含异常兜底话术"
+    # 3. 只检测真正的系统异常（不是"查不到数据"）
+    crash_phrases = ["服务暂时出现异常", "系统崩溃", "内部错误", "服务器错误"]
+    if any(phrase in reply for phrase in crash_phrases):
+        return "回复中包含系统异常话术，可能是执行失败"
 
-    # 4. 知识库场景的特殊检查：如果用户问知识/政策类问题，回复却说不知道
-    knowledge_refuse = ["抱歉，我在企业知识库中暂时没找到", "暂时没找到相关的说明"]
-    if any(phrase in reply for phrase in knowledge_refuse):
-        return "知识库未命中，需要改写查询重试"
+    # 4. 检测LLM的自我暴露（表明它是AI）
+    ai_self_ref = ["作为AI", "作为人工智能", "由AI生成", "AI客服小美提醒"]
+    if any(phrase in reply for phrase in ai_self_ref):
+        return "回复中出现了AI自我暴露话术，应当移除"
+
+    # 注意：以下情况不算问题，不再标记：
+    # - "暂无记录/暂时没查到" → 这是如实报告，不是兜底
+    # - "建议联系人工客服" → 这是合理引导，不是异常
+    # - "请稍后重试" → 结合上下文可能合理
 
     return None  # 通过快速检查

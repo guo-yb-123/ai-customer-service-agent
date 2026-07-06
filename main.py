@@ -7,6 +7,7 @@ from app.api.chat import router as chat_router
 from app.api.task import router as task_router
 from app.api.ws import router as ws_router
 from app.api.admin import router as admin_router
+from app.api.graph import router as graph_router
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.utils.logging_config import setup_logging, set_trace_id, get_logger, get_trace_id
 import redis
@@ -59,6 +60,7 @@ app.include_router(chat_router, prefix="/api/v1")
 app.include_router(task_router, prefix="/api/v1")
 app.include_router(ws_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(graph_router, prefix="/api/v1")
 
 # 静态文件（客服工作台）
 _static_dir = Path(__file__).parent / "app" / "static"

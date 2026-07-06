@@ -6,7 +6,6 @@ import psycopg2
 from app.utils.llm import call_qwen_once
 import json
 import redis
-from app.utils.json_parser import extract_json_from_llm, safe_loads
 from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)

@@ -178,6 +178,7 @@ def list_order_by_user(user_id: str):
         item = {
             "order_no": order_no,
             "goods_name": goods_name,
+            "price": float(order.get("pay_amount", 0) or 0),
             "order_status": order_status,
             "tracking_no": tracking_no,
             "track_info": track_info
@@ -328,12 +329,11 @@ def detail_aftersale(user_id: str, aftersale_no: str):
 @app.get("/api/order/logistics/detail")
 def detail_logistics_by_tracking(user_id: str, tracking_no: str):
     sql = """
-    select 
-        o.order_no, 
-        o.goods_name, 
-        o.tracking_no, 
-        l.track_list as track_info,
-        '运输中' as logistics_status 
+    select
+        o.order_no,
+        o.goods_name,
+        o.tracking_no,
+        l.track_list as track_info
     from t_order o
     left join t_logistics l on o.tracking_no = l.tracking_no
     where o.user_id = %s and o.tracking_no = %s
@@ -343,7 +343,32 @@ def detail_logistics_by_tracking(user_id: str, tracking_no: str):
     if not data:
         return {"success": False, "data": {}, "error_msg": "未查询到该快递单号关联的订单"}
 
-    return {"success": True, "data": data[0]}
+    result = data[0]
+    # 从 track_list JSON 中解析真实物流状态
+    track_info = result.get("track_info")
+    if isinstance(track_info, str):
+        try:
+            track_list = json.loads(track_info)
+        except (json.JSONDecodeError, TypeError):
+            track_list = []
+    elif isinstance(track_info, list):
+        track_list = track_info
+    else:
+        track_list = []
+
+    if track_list:
+        # 取最后一条轨迹的文本作为当前状态（去掉日期时间前缀）
+        last_track = track_list[-1]
+        parts = last_track.split(" ", 2)  # "2026-06-18 16:20 本人签收" → ["2026-06-18", "16:20", "本人签收"]
+        if len(parts) >= 3:
+            logistics_status = parts[2]
+        else:
+            logistics_status = last_track
+    else:
+        logistics_status = "暂无轨迹"
+
+    result["logistics_status"] = logistics_status
+    return {"success": True, "data": result}
 
 
 # 根据用户id查询该用户购买过的商品列表

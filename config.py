@@ -82,6 +82,12 @@ CELERY_BROKER_URL = os.getenv(
     f"redis://{REDIS_CONFIG['host']}:{REDIS_CONFIG['port']}/{REDIS_CONFIG['db']}",
 )
 
+# ===== LangGraph =====
+ENABLE_LANGGRAPH = os.getenv("ENABLE_LANGGRAPH", "0") == "1"  # 功能开关，默认关闭
+MAX_REFLECTION_RETRIES = int(os.getenv("MAX_REFLECTION_RETRIES", "2"))
+APPROVAL_TIMEOUT_SEC = int(os.getenv("APPROVAL_TIMEOUT_SEC", "300"))  # 人工审批超时 5 分钟
+
 # ===== 业务微服务 =====
-INNER_ORDER_API = os.getenv("INNER_ORDER_API", "http://business_api:8001")
-INNER_CRM_API = os.getenv("INNER_CRM_API", "http://business_api:8001/api/crm")
+_DEFAULT_BIZ_HOST = "business_api" if DOCKER_ENV else "127.0.0.1"
+INNER_ORDER_API = os.getenv("INNER_ORDER_API", f"http://{_DEFAULT_BIZ_HOST}:8001")
+INNER_CRM_API = os.getenv("INNER_CRM_API", f"http://{_DEFAULT_BIZ_HOST}:8001/api/crm")

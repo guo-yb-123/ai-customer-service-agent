@@ -371,8 +371,17 @@ def query_all_logistics_info(user_id: str) -> dict:
                 track_info = item.get('track_info', {})
                 real_track_list = "暂无轨迹"
                 if isinstance(track_info, dict):
-                    if 'track_list' in track_info:
-                        real_track_list = track_info['track_list']
+                    track_list_raw = track_info.get('track_list', '')
+                    if track_list_raw:
+                        # track_list 可能是 JSON 字符串或已解析的 list
+                        if isinstance(track_list_raw, str):
+                            try:
+                                parsed = __import__('json').loads(track_list_raw)
+                                real_track_list = " → ".join(parsed) if isinstance(parsed, list) else track_list_raw
+                            except (__import__('json').JSONDecodeError, TypeError):
+                                real_track_list = track_list_raw
+                        elif isinstance(track_list_raw, list):
+                            real_track_list = " → ".join(track_list_raw)
 
                 line = (
                     f"订单号：{item.get('order_no', '暂无')} | "

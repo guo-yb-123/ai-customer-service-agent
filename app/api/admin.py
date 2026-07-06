@@ -1,16 +1,20 @@
 """
 人工客服工作台 API
-功能：工单列表 / 认领 / 回复 / 关闭 / 查看对话历史
+功能：工单列表 / 认领 / 回复 / 关闭 / 查看对话历史 / 审批管理
 """
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel
 from typing import Optional
+from langgraph.types import Command
 
 from app.db.database import get_db
 from app.db.models import ServiceTicket, SessionArchive
 from app.services.graph.tools.agent_memory import AgentExternalMemory
+from app.services.graph import get_compiled_graph
+from app.utils.redis_client import redis_client
 from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -174,3 +178,139 @@ def ticket_stats(db: Session = Depends(get_db)):
         "active": active,
         "closed": closed,
     }
+
+
+# ===== 审批管理（LangGraph Human-in-the-Loop）=====
+
+class ApprovalResponse(BaseModel):
+    reason: str = ""
+
+
+@router.get("/approvals")
+def list_pending_approvals():
+    """
+    列出所有待审批的操作。
+
+    从 Redis 扫描 approval:* 键，返回状态为 pending 的记录。
+    """
+    approvals = []
+    try:
+        for key in redis_client.scan_iter("approval:*"):
+            data = redis_client.get(key)
+            if data:
+                try:
+                    record = json.loads(data)
+                    if record.get("status") == "pending":
+                        approvals.append(record)
+                except json.JSONDecodeError:
+                    pass
+    except Exception as e:
+        logger.warning("扫描审批记录失败: %s", e)
+
+    # 按创建时间倒序排列
+    approvals.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"approvals": approvals, "total": len(approvals)}
+
+
+@router.post("/approvals/{approval_id}/approve")
+def approve_action(approval_id: str, body: ApprovalResponse = ApprovalResponse()):
+    """
+    批准指定的待审批操作。
+
+    批准后，对应的 LangGraph graph 会从 interrupt 点恢复执行。
+    """
+    redis_key = f"approval:{approval_id}"
+    raw = redis_client.get(redis_key)
+
+    if not raw:
+        raise HTTPException(status_code=404, detail="审批记录不存在或已过期")
+
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="审批记录格式错误")
+
+    if record.get("status") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"审批记录状态为 {record.get('status')}，无法操作",
+        )
+
+    session_id = record.get("session_id", "")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="审批记录缺少 session_id")
+
+    # 更新 Redis 记录
+    from datetime import datetime
+    record["status"] = "approved"
+    record["approved_at"] = datetime.now().isoformat()
+    redis_client.setex(redis_key, 3600, json.dumps(record, ensure_ascii=False))
+
+    # 恢复 graph 执行
+    try:
+        graph = get_compiled_graph()
+        graph_config = {"configurable": {"thread_id": session_id}}
+        result = graph.invoke(Command(resume={"approved": True}), graph_config)
+
+        logger.info(
+            "审批通过: approval_id=%s, session=%s, final_stage=%s",
+            approval_id, session_id, result.get("stage", "?"),
+        )
+    except Exception as e:
+        logger.exception("恢复 graph 执行失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"恢复执行失败: {str(e)}")
+
+    return {"success": True, "message": "操作已批准，Agent 已继续执行"}
+
+
+@router.post("/approvals/{approval_id}/reject")
+def reject_action(approval_id: str, body: ApprovalResponse = ApprovalResponse()):
+    """
+    拒绝指定的待审批操作。
+
+    拒绝后，graph 会恢复执行并生成拒绝回复。
+    """
+    redis_key = f"approval:{approval_id}"
+    raw = redis_client.get(redis_key)
+
+    if not raw:
+        raise HTTPException(status_code=404, detail="审批记录不存在或已过期")
+
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="审批记录格式错误")
+
+    if record.get("status") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"审批记录状态为 {record.get('status')}，无法操作",
+        )
+
+    session_id = record.get("session_id", "")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="审批记录缺少 session_id")
+
+    # 更新 Redis 记录
+    from datetime import datetime
+    record["status"] = "rejected"
+    record["approved_at"] = datetime.now().isoformat()
+    record["reject_reason"] = body.reason
+    redis_client.setex(redis_key, 3600, json.dumps(record, ensure_ascii=False))
+
+    # 恢复 graph 执行（拒绝）
+    try:
+        graph = get_compiled_graph()
+        graph_config = {"configurable": {"thread_id": session_id}}
+        resume_value = {"approved": False, "reason": body.reason}
+        result = graph.invoke(Command(resume=resume_value), graph_config)
+
+        logger.info(
+            "审批拒绝: approval_id=%s, session=%s, reason=%s",
+            approval_id, session_id, body.reason,
+        )
+    except Exception as e:
+        logger.exception("恢复 graph 执行失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"恢复执行失败: {str(e)}")
+
+    return {"success": True, "message": "操作已拒绝"}

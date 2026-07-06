@@ -1,13 +1,15 @@
 # AI 智能客服 Agent
 
-基于 **Function Calling** 的多工具协同 AI Agent，LLM 自主判断用户意图，从 7 个业务工具中自动选择并执行，集成 RAG 知识库检索和 Reflection 自检机制。
+基于 **LangGraph** 的多节点状态机 AI Agent，支持槽位填充、人工审批、反思自检。LLM 自主判断用户意图，从 7 个业务工具中自动选择并执行，集成 RAG 知识库检索和多模型自动降级。
 
 ## 架构
 
 ```
-用户 → FastAPI → Agent 调度 → LLM (Function Calling)
+用户 → FastAPI → LangGraph StateGraph
                       │
            ┌──────────┼──────────┐
+           ↓          ↓          ↓
+      意图识别    槽位填充    条件路由
            ↓          ↓          ↓
       订单查询    物流跟踪    会员服务
            ↓          ↓          ↓
@@ -20,13 +22,26 @@
         PostgreSQL (会话记忆 + pgvector 向量库)
 ```
 
+## 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **LangGraph 状态机** | 9 节点图：意图提取 → 槽位校验 → 技能执行 → 敏感检测 → 人工审批 → 回复生成 → 反思自检 → 最终化 |
+| **槽位填充** | 用户信息不完整时自动追问，如「我要退货」→「请问您要退哪件商品呢？」 |
+| **人工审批** | 退货、创建工单等敏感操作自动暂停，等待客服工作台审核后继续执行 |
+| **反思自检** | 回复前校验：是否编造数据、是否遗漏关键信息、是否匹配用户意图。不通过则自动重试 |
+| **多模型自动降级** | deepseek-v3 → deepseek-r1 → qwen-max → qwen-plus → qwen3-235b-a22b，token 耗尽自动切换 |
+| **RAG 混合检索** | pgvector 向量检索 + 全文检索 + Re-rank 重排序 |
+| **会话记忆** | Redis + PostgreSQL 双层存储，支持多轮对话上下文 |
+| **转人工闭环** | 情绪识别 → 自动创建工单 → WebSocket 推送客服工作台 |
+
 ## 能做什么
 
 | 场景 | 用户说什么 | Agent 做什么 |
 |------|-----------|-------------|
-| 查订单 | "我的所有订单" | 调 `query_all_order` → 返回完整订单列表 |
-| 查物流 | "智能电饭煲到哪了" | 调 `query_logistics_by_goods` → 模糊匹配商品→查物流 |
-| 退货 | "退掉恒温热水壶" | 调 `initiate_return_by_goods` → 自动匹配订单→提交工单 |
+| 查订单 | "我的所有订单" | 调 `query_all_order` → 返回完整订单列表（含金额） |
+| 查物流 | "智能电饭煲到哪了" | 调 `query_logistics_by_goods` → 模糊匹配商品→查物流轨迹 |
+| 退货 | "退掉恒温热水壶" | 调 `initiate_return_by_goods` → 自动匹配订单→提交审批→人工确认 |
 | 查会员 | "我的积分多少" | 调 `query_crm_user_info` → 返回等级/积分/订单数 |
 | 政策咨询 | "退换货流程是什么" | 调 `query_knowledge_base` → pgvector RAG 检索 |
 | 转人工 | "转人工" | 调 `transfer_human` → 自动创建工单 |
@@ -47,6 +62,9 @@ python terminal_chat.py
 # 4. 浏览器
 # API 文档: http://localhost:8000/docs
 # 客服工作台: http://localhost:8000/admin/admin.html
+
+# 5. 启用 LangGraph（新功能）
+# 在 .env 中设置 ENABLE_LANGGRAPH=1 后重启
 ```
 
 ## 项目结构
@@ -60,36 +78,62 @@ python terminal_chat.py
 │
 ├── app/
 │   ├── api/                   # REST + WebSocket
-│   │   ├── chat.py            # /chat/local, /chat/stream
+│   │   ├── chat.py            # /chat/local (兼容旧版), /chat/stream
+│   │   ├── graph.py           # /chat/graph (LangGraph), /admin/approvals
 │   │   ├── task.py            # 异步任务轮询
-│   │   ├── admin.py           # 客服工作台 API
-│   │   └── ws.py              # WebSocket 推送
-│   ├── services/graph/        # Agent 核心调度
+│   │   ├── admin.py           # 客服工作台 API + 审批管理
+│   │   └── ws.py              # WebSocket (任务推送 + 管理员审批通知)
+│   ├── services/graph/        # LangGraph Agent 核心
+│   │   ├── langgraph_agent.py # StateGraph 定义 (9 节点 + 条件路由)
+│   │   ├── state.py           # GraphState (31 字段)
+│   │   ├── slot_schemas.py    # 意图→槽位映射 + 敏感操作定义
+│   │   ├── checkpoint.py      # PostgresSaver / MemorySaver
+│   │   ├── nodes/             # 图节点实现
+│   │   │   ├── extract.py     # 意图识别
+│   │   │   ├── check.py       # 槽位校验
+│   │   │   ├── prompt_slot.py # 追问生成
+│   │   │   ├── execute.py     # 技能执行
+│   │   │   ├── check_sensitive.py # 敏感操作检测
+│   │   │   ├── approval.py    # 人工审批 (LangGraph interrupt)
+│   │   │   ├── generate.py    # 回复生成
+│   │   │   ├── reflect.py     # 反思自检
+│   │   │   └── finalize.py    # 最终化 + 会话保存
 │   │   └── tools/
-│   │       ├── agent_core.py  # Agent 主调度
+│   │       ├── agent_core.py  # 旧版 Agent 主调度 (兼容)
 │   │       ├── agent_memory.py # 会话记忆
-│   │       ├── agent_reflection.py # 自检纠错
+│   │       ├── agent_reflection.py # 自检模块
 │   │       ├── biz_skills/    # 7 个业务 Skill
 │   │       └── prompts/       # 系统提示词
-│   ├── tasks/                 # Celery 异步任务
-│   ├── db/                    # 数据库模型
-│   └── utils/                 # LLM/RAG/鉴权/限流/熔断
+│   ├── db/                    # 数据库模型 (PostgreSQL)
+│   └── utils/                 # LLM/RAG/鉴权/限流/熔断/模型降级
 │
-├── business_api/main.py       # 业务微服务（订单/CRM/物流/商品）
+├── business_api/main.py       # 业务微服务（订单/CRM/物流/商品/售后）
 ├── config/prompts/            # 提示词 YAML（热加载）
-├── tests/                     # 29 个测试用例
-├── eval/                      # Agent 评估体系（30 条标注）
 └── data/                      # 测试数据 SQL
 ```
 
-## 技术要点
+## API 端点
 
-- **Agent 调度**: LLM 通过 Function Calling 自主选择工具，多轮推理，单轮最多 3 步
-- **Reflection 自检**: 回复前校验三项 — 是否编造订单号、是否遗漏关键信息、是否匹配用户意图
-- **RAG 混合检索**: pgvector 向量检索 + 全文检索 + Re-rank 重排序
-- **会话记忆**: Redis + PostgreSQL 双层存储，支持多轮对话上下文
-- **转人工闭环**: 情绪识别 → 自动创建工单 → WebSocket 推送客服工作台
-- **异步任务**: Celery + Redis，大查询不阻塞对话
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/chat/local` | POST | 旧版 Agent 对话（兼容） |
+| `/api/v1/chat/stream` | POST | 流式对话 |
+| `/api/v1/chat/graph` | POST | LangGraph Agent 对话 |
+| `/api/v1/chat/graph/stream` | POST | LangGraph 流式对话 |
+| `/api/v1/admin/tickets` | GET | 工单列表 |
+| `/api/v1/admin/approvals` | GET | 待审批列表 |
+| `/api/v1/admin/approvals/{id}/approve` | POST | 批准操作 |
+| `/api/v1/admin/approvals/{id}/reject` | POST | 拒绝操作 |
+| `/api/v1/ws/task/{task_id}` | WS | 任务状态推送 |
+| `/api/v1/ws/admin` | WS | 管理员审批通知 |
+
+## 技术栈
+
+- **框架**: FastAPI + LangGraph + Celery
+- **LLM**: 阿里云 DashScope (DeepSeek / Qwen 系列，自动降级)
+- **数据库**: PostgreSQL (会话) + pgvector (向量) + MySQL (业务)
+- **缓存**: Redis (会话状态 / 消息队列 / 审批记录)
+- **部署**: Docker Compose 一键启动
 
 ## 界面
 
