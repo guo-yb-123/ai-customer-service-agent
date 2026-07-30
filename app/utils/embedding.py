@@ -167,7 +167,11 @@ def similar_search(query_text: str, top_k: int = 3, threshold: float = 0.8):
 
 def build_rag_prompt(user_query: str, top_k: int = 2):
     """混合检索 + 相关性重排 + 检索质量自检"""
-    docs = retrieve_knowledge(user_query, top_n=top_k * 2)
+    try:
+        docs = retrieve_knowledge(user_query, top_n=top_k * 2)
+    except Exception as e:
+        logger.warning("知识库检索异常: %s，返回空结果", e)
+        return f"抱歉，知识库服务暂时不可用，请稍后重试或联系人工客服。", []
 
     # Re-rank：用余弦相似度重排序
     if docs:
@@ -183,11 +187,15 @@ def build_rag_prompt(user_query: str, top_k: int = 2):
 
     # 检索质量自检：最好文档的相似度太低 → 返回空
     if docs and docs[0].get("_rerank_score", 0) < 0.5:
-        empty_prompt = f"""你是一个严谨的AI客服专员。请仅根据下面参考资料回答用户问题，禁止编造信息。
-参考资料：未找到与\"{user_query}\"高度相关的知识库内容。
-用户问题：{user_query}
-请直接回答\"抱歉，我在企业知识库中暂时没找到相关的说明\"。"""
-        return empty_prompt, []
+        docs = []  # 视为无结果，走下面的空文档逻辑
+
+    if not docs:
+        # 无知识库结果：返回直接客服回复，不绕 LLM 二次处理
+        no_result_reply = (
+            f"抱歉，我在企业知识库中暂时没找到与「{user_query}」相关的说明。\n"
+            "建议您联系人工客服获取更准确的答复，或稍后再试。"
+        )
+        return no_result_reply, []
 
     context = "\n---\n".join([doc["content"] for doc in docs])
 

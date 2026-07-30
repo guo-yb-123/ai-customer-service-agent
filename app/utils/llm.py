@@ -19,12 +19,13 @@ client = OpenAI(
 
 # ===== 模型自动降级切换 =====
 # 当主模型 token 耗尽或不可用时，按优先级依次尝试备用模型
+# 所有模型均已验证当前有免费额度（2026-07-07）
 FALLBACK_MODELS = [
-    "deepseek-v3",       # 首选
-    "deepseek-r1",       # 备用1：同系列 DeepSeek
-    "qwen-max",          # 备用2：通义千问旗舰
-    "qwen-plus",         # 备用3：通义千问增强
-    "qwen3-235b-a22b",   # 备用4：通义千问3
+    "qwen-max",          # 首选：通义千问旗舰，中文能力最强
+    "qwen-plus",         # 备用1：通义千问增强版，性价比高
+    "deepseek-r1",       # 备用2：DeepSeek 推理模型
+    "qwen-plus-latest",  # 备用3：通义千问最新版
+    "qwen3-235b-a22b",   # 备用4：通义千问3 235B 大模型
 ]
 
 # 需要触发模型切换的错误关键词

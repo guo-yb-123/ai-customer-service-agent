@@ -32,6 +32,7 @@ AI 回复内容：{ai_reply}
 5. fix_suggestion: 如果有问题，给出修改建议（没问题写"无"）
 
 只返回 JSON，不要任何其他文字。
+请务必用中文输出（fix_suggestion 用中文写）。
 格式：{{"has_hallucination": false, "has_missing_info": false, "matches_intent": true, "overall_score": 5, "fix_suggestion": "无"}}
 """
 
@@ -138,7 +139,9 @@ def _quick_rule_check(reply: str, tool_result: str) -> str | None:
         return "回复中包含系统异常话术，可能是执行失败"
 
     # 4. 检测LLM的自我暴露（表明它是AI）
-    ai_self_ref = ["作为AI", "作为人工智能", "由AI生成", "AI客服小美提醒"]
+    # 「AI客服」是正常自称；「作为AI，」「作为AI。」才是暴露AI身份
+    ai_self_ref = ["作为人工智能", "由AI生成", "我是一个AI", "AI语言模型", "AI助手小美",
+                   "作为AI，", "作为AI。", "作为AI；", "作为AI！"]
     if any(phrase in reply for phrase in ai_self_ref):
         return "回复中出现了AI自我暴露话术，应当移除"
 

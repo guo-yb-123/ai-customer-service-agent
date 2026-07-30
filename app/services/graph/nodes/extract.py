@@ -51,8 +51,14 @@ INTENT_EXTRACT_PROMPT = """你是AI客服的意图识别模块。根据用户输
 3. "投诉/我要投诉" → intent=transfer_human
 4. "积分/会员/等级/账户" → intent=query_crm
 5. 尽量匹配具体意图，不要轻易返回 clarify。只有完全无法判断时才用 clarify。
+6. 多轮对话上下文：如果缺失槽位(missing_slots)不为空，说明上一轮AI问了用户一个问题，
+   用户这次输入大概率是在回答那个问题。此时应保持上一轮的 intent 不变，
+   只从用户输入中提取缺失的参数值补入 extracted_params。
+   例如：上一轮AI问"您要退哪件商品？"，用户回复"恒温热水壶"，
+   此时 intent 仍应为 initiate_return_by_goods，goods_name="恒温热水壶"。
 如果用户这次输入补全了缺失的参数，请在 extracted_params 中体现。
-只返回JSON，不要任何其他文字。"""
+只返回JSON，不要任何其他文字。
+请务必用中文输出（JSON的value值用中文）。"""
 
 
 def extract_intent_node(state: GraphState) -> dict:

@@ -30,7 +30,7 @@
 | **槽位填充** | 用户信息不完整时自动追问，如「我要退货」→「请问您要退哪件商品呢？」 |
 | **人工审批** | 退货、创建工单等敏感操作自动暂停，等待客服工作台审核后继续执行 |
 | **反思自检** | 回复前校验：是否编造数据、是否遗漏关键信息、是否匹配用户意图。不通过则自动重试 |
-| **多模型自动降级** | deepseek-v3 → deepseek-r1 → qwen-max → qwen-plus → qwen3-235b-a22b，token 耗尽自动切换 |
+| **多模型自动降级** | qwen-max → qwen-plus → deepseek-r1 → qwen-plus-latest → qwen3-235b-a22b，token 耗尽自动切换 |
 | **RAG 混合检索** | pgvector 向量检索 + 全文检索 + Re-rank 重排序 |
 | **会话记忆** | Redis + PostgreSQL 双层存储，支持多轮对话上下文 |
 | **转人工闭环** | 情绪识别 → 自动创建工单 → WebSocket 推送客服工作台 |
@@ -48,37 +48,55 @@
 
 ## 快速开始
 
+### Docker 一键启动
+
 ```bash
-# 1. 配置
 cp .env.example .env
 # 编辑 .env，填入 DASHSCOPE_API_KEY=sk-xxx
-
-# 2. 一行启动
 docker compose up -d
-
-# 3. 终端对话
-python terminal_chat.py
-
-# 4. 浏览器
-# API 文档: http://localhost:8000/docs
-# 客服工作台: http://localhost:8000/admin/admin.html
-
-# 5. 启用 LangGraph（新功能）
-# 在 .env 中设置 ENABLE_LANGGRAPH=1 后重启
 ```
+
+### 本地开发
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 配置（MySQL 等本地服务需自行启动）
+cp .env.example .env
+# 至少填入 DASHSCOPE_API_KEY
+
+# 3. 启动主 API（端口 8000）
+python main.py
+
+# 4. 启动业务 API（端口 8001）
+python business_api/main.py
+
+# 5. 启动 Web 对话界面（端口 8502）
+streamlit run chat_ui.py --server.port 8502
+```
+
+### 浏览器访问
+
+| 页面 | 地址 |
+|------|------|
+| Web 对话界面 | `http://localhost:8502` |
+| 客服工作台（人工审批） | `http://localhost:8000/admin/admin.html` |
+| 主 API 文档 (Swagger) | `http://localhost:8000/docs` |
+| 业务 API 文档 | `http://localhost:8001/docs` |
 
 ## 项目结构
 
 ```
 ├── main.py                    # FastAPI 入口
 ├── config.py                  # 配置（环境变量驱动）
-├── terminal_chat.py           # 终端对话 Demo
+├── chat_ui.py                 # Streamlit Web 对话界面
 ├── docker-compose.yml         # 一键启动全部服务
 ├── Dockerfile
 │
 ├── app/
 │   ├── api/                   # REST + WebSocket
-│   │   ├── chat.py            # /chat/local (兼容旧版), /chat/stream
+│   │   ├── chat.py            # /chat/local, /chat/stream
 │   │   ├── graph.py           # /chat/graph (LangGraph), /admin/approvals
 │   │   ├── task.py            # 异步任务轮询
 │   │   ├── admin.py           # 客服工作台 API + 审批管理
@@ -99,7 +117,7 @@ python terminal_chat.py
 │   │   │   ├── reflect.py     # 反思自检
 │   │   │   └── finalize.py    # 最终化 + 会话保存
 │   │   └── tools/
-│   │       ├── agent_core.py  # 旧版 Agent 主调度 (兼容)
+│   │       ├── agent_core.py  # Agent 主调度
 │   │       ├── agent_memory.py # 会话记忆
 │   │       ├── agent_reflection.py # 自检模块
 │   │       ├── biz_skills/    # 7 个业务 Skill
@@ -116,7 +134,7 @@ python terminal_chat.py
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/chat/local` | POST | 旧版 Agent 对话（兼容） |
+| `/api/v1/chat/local` | POST | Agent 对话 |
 | `/api/v1/chat/stream` | POST | 流式对话 |
 | `/api/v1/chat/graph` | POST | LangGraph Agent 对话 |
 | `/api/v1/chat/graph/stream` | POST | LangGraph 流式对话 |
@@ -129,18 +147,12 @@ python terminal_chat.py
 
 ## 技术栈
 
-- **框架**: FastAPI + LangGraph + Celery
+- **框架**: FastAPI + LangGraph + Celery + Streamlit
 - **LLM**: 阿里云 DashScope (DeepSeek / Qwen 系列，自动降级)
 - **数据库**: PostgreSQL (会话) + pgvector (向量) + MySQL (业务)
 - **缓存**: Redis (会话状态 / 消息队列 / 审批记录)
 - **部署**: Docker Compose 一键启动
 
-## 界面
 
-| 客服工作台 | Docker 服务 | 终端对话 |
-|:---:|:---:|:---:|
-| [🎬 B站演示](https://www.bilibili.com/video/BV18oMu6eEhp/) | ![健康检查](docs/screenshots/7de05c7016d4c164484b3cd581ebad96.png) | [🎬 B站演示](https://www.bilibili.com/video/BV1KNMg6FERL/) |
 
-## License
 
-MIT

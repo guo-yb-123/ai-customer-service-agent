@@ -83,7 +83,7 @@ CELERY_BROKER_URL = os.getenv(
 )
 
 # ===== LangGraph =====
-ENABLE_LANGGRAPH = os.getenv("ENABLE_LANGGRAPH", "0") == "1"  # 功能开关，默认关闭
+ENABLE_LANGGRAPH = os.getenv("ENABLE_LANGGRAPH", "1") == "1"  # 功能开关，默认开启
 MAX_REFLECTION_RETRIES = int(os.getenv("MAX_REFLECTION_RETRIES", "2"))
 APPROVAL_TIMEOUT_SEC = int(os.getenv("APPROVAL_TIMEOUT_SEC", "300"))  # 人工审批超时 5 分钟
 

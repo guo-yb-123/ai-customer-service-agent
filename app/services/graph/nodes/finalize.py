@@ -38,6 +38,12 @@ def finalize_node(state: GraphState) -> dict:
             AgentExternalMemory.append_chat(session_id=session_id, role="user", content=user_input)
             AgentExternalMemory.append_chat(session_id=session_id, role="assistant", content=reply_text)
             AgentExternalMemory.save_task_state(session_id, state)
+            # 同步 collected_slots 和 missing_slots 到 session meta，确保多轮对话状态不丢失
+            AgentExternalMemory.save_slots(
+                session_id=session_id,
+                collected_slots=state.collected_slots or {},
+                missing_slots=state.missing_slots or [],
+            )
             logger.info("会话记忆已保存: session=%s", session_id)
         except Exception as e:
             logger.warning("保存会话记忆失败: %s", e)

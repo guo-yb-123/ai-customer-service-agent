@@ -78,6 +78,7 @@ def _run_langgraph_chat(session_id: str, user_id: str, question: str, member_lev
     memory = AgentExternalMemory.load_session_meta(session_id)
     chat_history = memory.get("chat_history", [])
     extracted_slots = memory.get("extracted_slots", {})
+    missing_slots = memory.get("missing_slots", [])
 
     initial_state = GraphState(
         session_id=session_id,
@@ -87,6 +88,7 @@ def _run_langgraph_chat(session_id: str, user_id: str, question: str, member_lev
         member_level=member_level,
         chat_history=chat_history,
         collected_slots={"user_id": user_id, **extracted_slots},
+        missing_slots=missing_slots,
         max_reflection_retries=config.MAX_REFLECTION_RETRIES,
     )
 
@@ -95,6 +97,21 @@ def _run_langgraph_chat(session_id: str, user_id: str, question: str, member_lev
 
     try:
         final_state = graph.invoke(initial_state, graph_config)
+
+        # 只在追问中保留槽位，对话完成则清空，防止跨话题污染
+        stage = final_state.get("stage", "")
+        if stage == "FILL_SLOT":
+            AgentExternalMemory.save_slots(
+                session_id=session_id,
+                collected_slots=final_state.get("collected_slots", {}),
+                missing_slots=final_state.get("missing_slots", []),
+            )
+        else:
+            AgentExternalMemory.save_slots(session_id, {}, [])
+            try:
+                graph.update_state(graph_config, {"collected_slots": {}, "missing_slots": [], "tool_name": None})
+            except Exception:
+                pass
 
         response_data = {
             "reply": final_state.get("reply_text", ""),

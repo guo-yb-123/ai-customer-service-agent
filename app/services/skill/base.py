@@ -106,7 +106,7 @@ def query_logistics(tracking_no: str) -> dict:
             "text": f"物流服务连接异常：{err}"
         }
 
-# ========== 3. 查询 CRM 客户数据（旧版，可能不再使用） ==========
+# ========== 3. 查询 CRM 客户数据 ==========
 def query_crm_data(user_id: str) -> dict:
     try:
         url = f"{config.INNER_CRM_API}/customer"
@@ -470,7 +470,7 @@ def query_single_logistics_info(user_id: str, tracking_no: str) -> dict:
             "text": f"物流服务连接异常：{err}"
         }
 
-# ========== 10. 查询 CRM 用户信息（新版，带积分和手机） ==========
+# ========== 10. 查询 CRM 用户信息（积分和手机） ==========
 def query_crm_user_info(user_id: str) -> dict:
     try:
         url = f"{config.INNER_CRM_API}/customer"

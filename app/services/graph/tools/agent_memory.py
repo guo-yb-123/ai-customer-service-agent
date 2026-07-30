@@ -55,6 +55,19 @@ class AgentExternalMemory:
         if not raw:
             return{"chat_history":[],"last_intent":"","extracted_slots":{}}
         return json.loads(raw)
+
+    @staticmethod
+    def save_slots(session_id: str, collected_slots: dict, missing_slots: list):
+        """保存槽位状态到 session meta，确保多轮对话不丢失参数"""
+        meta = AgentExternalMemory.load_session_meta(session_id)
+        meta["extracted_slots"] = collected_slots
+        meta["missing_slots"] = missing_slots
+        redis_client.setex(
+            name=AgentExternalMemory._get_session_key(session_id),
+            time=SESSION_EXPIRE_SEC,
+            value=json.dumps(meta, ensure_ascii=False),
+        )
+
     @staticmethod
     def append_chat(session_id:str,role:str,content:str):
        meta = AgentExternalMemory.load_session_meta(session_id)

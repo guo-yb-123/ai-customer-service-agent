@@ -18,9 +18,15 @@ class KnowledgeBaseSkill(BaseSkill):
 
     def run(self, user_query: str, **kwargs):
         logger.info(f"=====进入知识库检索 run, 问题={user_query} =====")
-        prompt, docs = build_rag_prompt(user_query)
+        prompt_or_reply, docs = build_rag_prompt(user_query)
+        # 如果 build_rag_prompt 返回的是直接回复（无结果），直接用
+        if not docs:
+            return {"text": prompt_or_reply, "reply": prompt_or_reply}
+        # 否则提取检索到的原始内容作为工具结果，让 generate_reply 来组织语言
+        contents = [d["content"] for d in docs]
+        raw_text = "知识库检索到以下相关内容：\n" + "\n---\n".join(contents)
         return {
-            "text": prompt,
-            "reply": prompt,
-            "retrieved_docs": docs
+            "text": raw_text,
+            "reply": raw_text,
+            "retrieved_docs": docs,
         }

@@ -26,7 +26,8 @@ def execute_skill_node(state: GraphState) -> dict:
     - 审批通过后再次进入 → 真正执行
     """
     intent = state.intent or "fallback_query"
-    skill_name = state.tool_name or get_skill_name(intent)
+    # 始终从 intent 映射 skill，不信任 checkpointer 残留的 tool_name
+    skill_name = get_skill_name(intent)
     collected = state.collected_slots or {}
     user_id = state.user_id or ""
     session_id = state.session_id or ""
@@ -100,6 +101,8 @@ def _run_skill(
     call_args = dict(collected)
     call_args["user_id"] = user_id
     call_args["session_id"] = session_id
+    # 知识库检索需要用户原始问题
+    call_args["user_query"] = state.user_input or state.question or ""
 
     # 创建 DB session 并注入（skill 需要 db 参数时）
     sig_params = inspect.signature(target_skill.run).parameters

@@ -90,6 +90,22 @@ def chat_graph(
         # 执行 graph（可能因 interrupt 而提前返回）
         final_state = graph.invoke(initial_state, config_dict)
 
+        # 只在追问中保留槽位，对话完成则清空
+        stage = final_state.get("stage", "")
+        if stage == "FILL_SLOT":
+            AgentExternalMemory.save_slots(
+                session_id=sid,
+                collected_slots=final_state.get("collected_slots", {}),
+                missing_slots=final_state.get("missing_slots", []),
+            )
+        else:
+            AgentExternalMemory.save_slots(sid, {}, [])
+            # 清空 checkpointer 残留状态，防止跨话题污染
+            try:
+                graph.update_state(config_dict, {"collected_slots": {}, "missing_slots": [], "tool_name": None})
+            except Exception:
+                pass
+
         response = {
             "reply": final_state.get("reply_text", ""),
             "stage": final_state.get("stage", "FINISH"),
@@ -158,6 +174,7 @@ async def chat_graph_stream(
     memory = AgentExternalMemory.load_session_meta(sid)
     chat_history = memory.get("chat_history", [])
     extracted_slots = memory.get("extracted_slots", {})
+    missing_slots = memory.get("missing_slots", [])
 
     initial_state = GraphState(
         session_id=sid,
@@ -167,6 +184,7 @@ async def chat_graph_stream(
         member_level=member_level,
         chat_history=chat_history,
         collected_slots={"user_id": uid, **extracted_slots},
+        missing_slots=missing_slots,
         max_reflection_retries=config.MAX_REFLECTION_RETRIES,
     )
 
@@ -175,32 +193,53 @@ async def chat_graph_stream(
 
     async def event_stream():
         try:
-            yield f"data: {json.dumps({'type': 'start', 'stage': 'EXTRACT'})}\n\n"
-
             for event in graph.stream(initial_state, config_dict, stream_mode="updates"):
-                # event 格式: {node_name: state_update_dict}
                 for node_name, state_update in event.items():
-                    stage = state_update.get("stage", "")
-                    yield f"data: {json.dumps({'type': 'node', 'node': node_name, 'stage': stage})}\n\n"
+                    # 推送节点名称（终端可显示进度）
+                    yield f"data: {json.dumps({'type': 'node', 'node': node_name})}\n\n"
 
-                    # 如果是追问节点，发送追问文本
-                    if node_name == "prompt_slot":
+                    # 推送非 LLM 生成的回复文本（追问、审批提示）
+                    if node_name in ("prompt_slot", "check_sensitive"):
                         reply = state_update.get("reply_text", "")
                         if reply:
                             yield f"data: {json.dumps({'type': 'reply', 'content': reply})}\n\n"
 
-            # 获取最终状态
+            # 获取最终状态并保存槽位
             final_state = graph.get_state(config_dict)
             if final_state and final_state.values:
-                reply = final_state.values.get("reply_text", "")
+                vals = final_state.values
+                reply = vals.get("reply_text", "")
                 if reply:
                     yield f"data: {json.dumps({'type': 'reply', 'content': reply})}\n\n"
+                # 只在追问中保留槽位，对话完成则清空
+                stage = vals.get("stage", "")
+                if stage == "FILL_SLOT":
+                    AgentExternalMemory.save_slots(
+                        session_id=sid,
+                        collected_slots=vals.get("collected_slots", {}),
+                        missing_slots=vals.get("missing_slots", []),
+                    )
+                else:
+                    AgentExternalMemory.save_slots(sid, {}, [])
+                    try:
+                        graph.update_state(config_dict, {"collected_slots": {}, "missing_slots": [], "tool_name": None})
+                    except Exception:
+                        pass
 
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
         except Exception as e:
             error_str = str(e)
             if "interrupt" in error_str.lower():
+                # 审批中断：从 checkpointer 获取审批提示
+                try:
+                    interrupted_state = graph.get_state(config_dict)
+                    if interrupted_state and interrupted_state.values:
+                        reply = interrupted_state.values.get("reply_text", "")
+                        if reply:
+                            yield f"data: {json.dumps({'type': 'reply', 'content': reply})}\n\n"
+                except Exception:
+                    pass
                 yield f"data: {json.dumps({'type': 'interrupt', 'message': '等待审批'})}\n\n"
             else:
                 logger.exception("Graph 流式执行异常: %s", e)
