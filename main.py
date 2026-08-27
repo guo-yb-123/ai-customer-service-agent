@@ -126,6 +126,8 @@ def readiness_check():
             db=config.REDIS_CONFIG["db"],
             password=config.REDIS_CONFIG.get("password", "") or None,
             socket_connect_timeout=2,
+            socket_timeout=2,
+            retry=None,  # redis-py 8 默认开启重试，会让探针 48s 才失败，必须关闭
         )
         r.ping()
         checks["redis"] = "ok"
